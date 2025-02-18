@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <io.h>  // For access() function
+#include <windows.h>  // For multithreading
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -30,7 +31,7 @@ const char *get_content_type(const char *path) {
 // Function to send response
 void send_response(SOCKET client_socket, const char *file_path, const char *method) {
     char full_path[BUFFER_SIZE];
-    snprintf(full_path, sizeof(full_path), "./root/%s", file_path);
+    snprintf(full_path, sizeof(full_path), "./root%s", file_path);
 
     // Only allow GET requests
     if (strcmp(method, "GET") != 0) {
@@ -55,7 +56,6 @@ void send_response(SOCKET client_socket, const char *file_path, const char *meth
         send(client_socket, not_found, strlen(not_found), 0);
         return;
     }
-
 
     // Get content type
     const char *content_type = get_content_type(file_path);
@@ -91,12 +91,30 @@ void send_response(SOCKET client_socket, const char *file_path, const char *meth
 
 // Function to extract request details (method and filename)
 void parse_request(const char *request, char *method, char *filename) {
-    sscanf(request, "%s /%s ", method, filename);
+    sscanf(request, "%s %s ", method, filename);
 
     // Handle requests for root ("/")
     if (strcmp(filename, "") == 0 || strcmp(filename, "/") == 0) {
-        strcpy(filename, "index.html");
+        strcpy(filename, "/index.html");
     }
+}
+
+// Thread function to handle client request
+DWORD WINAPI handle_client(LPVOID lpParam) {
+    SOCKET client_socket = (SOCKET)lpParam;
+    char buffer[BUFFER_SIZE];
+    
+    memset(buffer, 0, BUFFER_SIZE);
+    recv(client_socket, buffer, BUFFER_SIZE, 0);
+    printf("Received request:\n%s\n", buffer);
+
+    char method[10] = {0}, filename[256] = {0};
+    parse_request(buffer, method, filename);
+
+    send_response(client_socket, filename, method);
+
+    closesocket(client_socket);
+    return 0;
 }
 
 int main() {
@@ -104,7 +122,6 @@ int main() {
     SOCKET server_fd, client_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE];
 
     // Initialize Winsock
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -150,15 +167,9 @@ int main() {
             continue;
         }
 
-        memset(buffer, 0, BUFFER_SIZE);
-        recv(client_socket, buffer, BUFFER_SIZE, 0);
-        printf("Received request:\n%s\n", buffer);
-
-        char method[10] = {0}, filename[256] = {0};
-        parse_request(buffer, method, filename);
-
-        send_response(client_socket, filename, method);
-        closesocket(client_socket);
+        // Create a new thread to handle the client request
+        DWORD threadId;
+        CreateThread(NULL, 0, handle_client, (LPVOID)client_socket, 0, &threadId);
     }
 
     closesocket(server_fd);
